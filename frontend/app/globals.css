@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Custom animations for quiz game */
+@keyframes pulse-timer {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes correct-flash {
+  0%, 100% { 
+    background-color: transparent; 
+  }
+  50% { 
+    background-color: #22c55e; 
+  }
+}
+
+@keyframes wrong-flash {
+  0%, 100% { 
+    background-color: transparent; 
+  }
+  50% { 
+    background-color: #ef4444; 
+  }
+}
+
+.quiz-timer {
+  animation: pulse-timer 1s ease-in-out infinite;
+}
+
+.correct-answer {
+  animation: correct-flash 0.6s ease-in-out;
+}
+
+.wrong-answer {
+  animation: wrong-flash 0.6s ease-in-out;
+}
+
+/* Quiz card styles */
+.quiz-card {
+  background-color: white;
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+  border: 1px solid #e5e7eb;
+  transition: all 0.3s ease;
+}
+
+.quiz-card:hover {
+  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+  transform: scale(1.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  .quiz-card {
+    background-color: #1f2937;
+    border-color: #374151;
+  }
+}
+
+/* Gradient background */
+.gradient-bg {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+/* Button styles */
+.quiz-button {
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  transition: all 0.2s;
+  transform: scale(1);
+  outline: none;
+}
+
+.quiz-button:hover {
+  transform: scale(1.05);
+}
+
+.quiz-button:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 0.5);
+}
+
+.quiz-button-primary {
+  background-color: #2563eb;
+  color: white;
+}
+
+.quiz-button-primary:hover {
+  background-color: #1d4ed8;
+}
+
+.quiz-button-primary:focus {
+  box-shadow: 0 0 0 3px rgb(147 197 253 / 0.5);
+}
+
+.quiz-button-secondary {
+  background-color: #e5e7eb;
+  color: #1f2937;
+}
+
+.quiz-button-secondary:hover {
+  background-color: #d1d5db;
+}
+
+.quiz-button-secondary:focus {
+  box-shadow: 0 0 0 3px rgb(209 213 219 / 0.5);
+}
