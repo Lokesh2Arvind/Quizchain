@@ -1,6 +1,6 @@
 'use client'
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react'
 import { createAppSessionMessage } from '@erc7824/nitrolite'
 import type { AppSession, StateUpdate, YellowState, YellowConfig } from '../types'
 
@@ -57,7 +57,9 @@ export function YellowProvider({ children }: { children: ReactNode }) {
     throw new Error('No wallet found')
   }
 
-  const connect = async () => {
+  const connect = useCallback(async () => {
+    if (state.isConnected) return // Prevent duplicate connections
+    
     try {
       setState(prev => ({ ...prev, error: null }))
       
@@ -97,7 +99,7 @@ export function YellowProvider({ children }: { children: ReactNode }) {
       console.error('Connection error:', error)
       setState(prev => ({ ...prev, error: (error as Error).message, isConnected: false }))
     }
-  }
+  }, [state.isConnected])
 
   const disconnect = () => {
     if (ws) {

@@ -1,184 +1,490 @@
-'use client'
+'use client';
 
-import { useState, useEffect } from 'react'
-import { formatTime } from '../lib/utils'
-import type { Quiz, Question } from '../types'
+import { useEffect, useState } from 'react';
+import { useBackend } from '@/lib/backend-context';
 
-interface QuizGameProps {
-  quiz: Quiz
-  currentQuestion: Question | null
-  questionIndex: number
-  totalQuestions: number
-  timeRemaining: number
-  isGameActive: boolean
-  onAnswerSubmit: (answerIndex: number) => void
-  onStartGame: () => void
-  onTimeUp: () => void
-  onBackToLobby: () => void
+interface Question {
+  questionNumber: number;
+  totalQuestions: number;
+  question: string;
+  options: string[];
+  timeLimit: number;
+  points: number;
+  topic: string;
 }
 
-export function QuizGame({
-  quiz,
-  currentQuestion,
-  questionIndex,
-  totalQuestions,
-  timeRemaining,
-  isGameActive,
-  onAnswerSubmit,
-  onStartGame,
-  onTimeUp,
-  onBackToLobby
-}: QuizGameProps) {
-  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null)
-  const [showCorrectAnswer, setShowCorrectAnswer] = useState(false)
+interface GameMetadata {
+  totalQuestions: number;
+  timePerQuestion: number;
+  pointsPerQuestion: number;
+  difficulty: string;
+  topic: string;
+}
 
-  // Timer countdown effect
+interface GameResults {
+  rankings: Array<{
+    address: string;
+    username: string;
+    score: number;
+    correctAnswers: number;
+  }>;
+  totalQuestions: number;
+  gameTime: number;
+}
+
+export default function QuizGame() {
+  const { socket, currentRoomId, leaveRoom, getCurrentRoom } = useBackend();
+  const [gameState, setGameState] = useState<'waiting' | 'loading' | 'ready' | 'playing' | 'ended'>('waiting');
+  const [gameMetadata, setGameMetadata] = useState<GameMetadata | null>(null);
+  const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
+  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
+  const [timeRemaining, setTimeRemaining] = useState<number>(30);
+  const [gameResults, setGameResults] = useState<GameResults | null>(null);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [roomCode, setRoomCode] = useState<string>('');
+  const [loadingMessage, setLoadingMessage] = useState<string>('Loading questions...');
+  const [leaderboard, setLeaderboard] = useState<Array<{username: string, walletAddress: string, score: number, correctAnswers: number}>>([]);
+  const [showFeedback, setShowFeedback] = useState<{show: boolean, isCorrect: boolean, score: number} | null>(null);
+
+  // Fetch current room data
   useEffect(() => {
-    if (isGameActive && timeRemaining > 0) {
-      const timer = setTimeout(() => {
-        if (timeRemaining === 1) {
-          onTimeUp()
+    const loadRoom = async () => {
+      if (currentRoomId) {
+        const result = await getCurrentRoom();
+        if (result.success && result.room) {
+          setRoomCode(result.room.code);
         }
-      }, 1000)
-      return () => clearTimeout(timer)
+      }
+    };
+    loadRoom();
+  }, [currentRoomId, getCurrentRoom]);
+
+  // Timer countdown
+  useEffect(() => {
+    if (gameState !== 'playing' || !currentQuestion) return;
+
+    setTimeRemaining(currentQuestion.timeLimit);
+    const interval = setInterval(() => {
+      setTimeRemaining((prev) => {
+        if (prev <= 1) {
+          // Auto-submit or move to next question
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [currentQuestion, gameState]);
+
+  // Listen for game events
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleGameStarting = (data: any) => {
+      console.log('🎮 Game starting, loading questions...', data);
+      setGameState('loading');
+      setLoadingMessage(data.message || 'Loading questions...');
+    };
+
+    const handleGameReady = (data: GameMetadata) => {
+      console.log('🎮 Game ready:', data);
+      setGameMetadata(data);
+      setGameState('ready');
+    };
+
+    const handleGameQuestion = (data: Question) => {
+      console.log('❓ New question:', data);
+      console.log('📋 Options received:', data.options);
+      console.log('📊 Options count:', data.options?.length);
+      setCurrentQuestion(data);
+      setSelectedAnswer(null);
+      setHasSubmitted(false);
+      setGameState('playing');
+    };
+
+    const handleGameEnded = (data: GameResults) => {
+      console.log('🏁 Game ended:', data);
+      setGameResults(data);
+      setGameState('ended');
+      setCurrentQuestion(null);
+    };
+
+    const handleScoreUpdate = (data: any) => {
+      console.log('📊 Score update:', data);
+      setLeaderboard(data.leaderboard || []);
+    };
+
+    socket.on('room:gameStarting', handleGameStarting);
+    socket.on('game:ready', handleGameReady);
+    socket.on('game:question', handleGameQuestion);
+    socket.on('game:ended', handleGameEnded);
+    socket.on('game:scoreUpdate', handleScoreUpdate);
+
+    return () => {
+      socket.off('room:gameStarting', handleGameStarting);
+      socket.off('game:ready', handleGameReady);
+      socket.off('game:question', handleGameQuestion);
+      socket.off('game:ended', handleGameEnded);
+      socket.off('game:scoreUpdate', handleScoreUpdate);
+    };
+  }, [socket]);
+
+  const handleAnswerSelect = (optionIndex: number) => {
+    if (hasSubmitted || timeRemaining === 0) return;
+    setSelectedAnswer(optionIndex);
+  };
+
+  const handleSubmitAnswer = () => {
+    if (selectedAnswer === null || hasSubmitted) return;
+    
+    setHasSubmitted(true);
+    
+    // Emit answer to backend (Phase 4)
+    if (socket && roomCode && currentQuestion) {
+      socket.emit('game:submitAnswer', {
+        roomCode: roomCode,
+        questionNumber: currentQuestion.questionNumber,
+        answer: selectedAnswer,
+        timeRemaining,
+      }, (response: any) => {
+        console.log('Answer response:', response);
+        if (response.success) {
+          // Show feedback popup
+          setShowFeedback({
+            show: true,
+            isCorrect: response.isCorrect,
+            score: response.score,
+          });
+          
+          // Hide feedback after 2 seconds
+          setTimeout(() => {
+            setShowFeedback(null);
+          }, 2000);
+        }
+      });
     }
-  }, [timeRemaining, isGameActive, onTimeUp])
+  };
 
-  const handleAnswerSelect = (index: number) => {
-    if (!isGameActive || selectedAnswer !== null) return
-    
-    setSelectedAnswer(index)
-    setShowCorrectAnswer(true)
-    
-    // Auto-submit after showing correct answer briefly
-    setTimeout(() => {
-      onAnswerSubmit(index)
-      setSelectedAnswer(null)
-      setShowCorrectAnswer(false)
-    }, 2000)
-  }
+  const handleLeaveGame = () => {
+    setGameState('waiting');
+    setGameMetadata(null);
+    setCurrentQuestion(null);
+    setGameResults(null);
+    leaveRoom();
+  };
 
-  if (!currentQuestion) {
+  // Waiting for game to start
+  if (gameState === 'waiting') {
     return (
-      <div className="max-w-4xl mx-auto">
-        <div className="bg-white/80 backdrop-blur-sm rounded-xl p-8 shadow-lg text-center">
-          <h2 className="text-2xl font-bold text-gray-800 mb-4">
-            Get Ready for: {quiz.title}
-          </h2>
-          <p className="text-gray-600 mb-6">{quiz.description}</p>
-          
-          <div className="grid grid-cols-2 gap-4 mb-8">
-            <div className="bg-blue-50 p-4 rounded-lg">
-              <div className="text-2xl font-bold text-blue-600">{totalQuestions}</div>
-              <div className="text-sm text-gray-600">Questions</div>
-            </div>
-            <div className="bg-green-50 p-4 rounded-lg">
-              <div className="text-2xl font-bold text-green-600">
-                ${(quiz.prizePool / 1000000).toFixed(0)}
-              </div>
-              <div className="text-sm text-gray-600">Prize Pool</div>
-            </div>
-          </div>
-
-          <button
-            onClick={onStartGame}
-            className="quiz-button quiz-button-primary text-lg px-8 py-4"
-          >
-            Start Quiz
-          </button>
-          
-          <button
-            onClick={onBackToLobby}
-            className="quiz-button quiz-button-secondary ml-4 px-6 py-3"
-          >
-            Back to Lobby
-          </button>
-        </div>
+      <div className="text-center p-8">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4"></div>
+        <p className="text-gray-400">Waiting for host to start the game...</p>
       </div>
-    )
+    );
   }
 
-  return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Progress Header */}
-      <div className="bg-white/80 backdrop-blur-sm rounded-xl p-6 shadow-lg">
-        <div className="flex justify-between items-center mb-4">
-          <div>
-            <h2 className="text-xl font-bold text-gray-800">{quiz.title}</h2>
-            <p className="text-gray-600">
-              Question {questionIndex + 1} of {totalQuestions}
-            </p>
-          </div>
-          
-          <div className="text-right">
-            <div className={`text-3xl font-bold font-mono ${
-              timeRemaining <= 10 ? 'text-red-600 quiz-timer' : 'text-blue-600'
-            }`}>
-              {formatTime(timeRemaining)}
+  // Loading questions
+  if (gameState === 'loading') {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50">
+        <div className="bg-gray-900 rounded-2xl p-8 max-w-md mx-4 border-4 border-yellow-500 shadow-2xl">
+          <div className="text-center">
+            {/* Animated spinner */}
+            <div className="relative mb-6">
+              <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-yellow-500 mx-auto"></div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-3xl">🎮</span>
+              </div>
             </div>
-            <div className="text-sm text-gray-600">Time Remaining</div>
+            
+            {/* Loading text */}
+            <h2 className="text-2xl font-bold text-yellow-500 mb-3 animate-pulse">
+              Starting Game...
+            </h2>
+            <p className="text-gray-300 text-lg mb-4">{loadingMessage}</p>
+            
+            {/* Progress indicator */}
+            <div className="flex justify-center gap-2 mb-4">
+              <div className="w-3 h-3 bg-yellow-500 rounded-full animate-bounce" style={{ animationDelay: '0s' }}></div>
+              <div className="w-3 h-3 bg-yellow-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+              <div className="w-3 h-3 bg-yellow-500 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+            </div>
+            
+            <p className="text-gray-500 text-sm">Fetching questions from API...</p>
           </div>
         </div>
-        
-        {/* Progress Bar */}
-        <div className="w-full bg-gray-200 rounded-full h-2">
-          <div
-            className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-            style={{ width: `${((questionIndex + 1) / totalQuestions) * 100}%` }}
-          />
-        </div>
       </div>
+    );
+  }
 
-      {/* Question Card */}
-      <div className="bg-white/80 backdrop-blur-sm rounded-xl p-8 shadow-lg">
-        <h3 className="text-2xl font-bold text-gray-800 mb-8 text-center">
-          {currentQuestion.text}
-        </h3>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {currentQuestion.options.map((option, index) => {
-            let buttonClass = 'p-6 rounded-lg border-2 transition-all duration-200 text-left '
+  // Game ready countdown
+  if (gameState === 'ready' && gameMetadata) {
+    return (
+      <div className="text-center p-8">
+        <h2 className="text-2xl font-bold text-yellow-500 mb-4">Get Ready! 🎯</h2>
+        <div className="bg-gray-800 rounded-xl p-6 max-w-md mx-auto">
+          <div className="space-y-3 text-left">
+            <div className="flex justify-between">
+              <span className="text-gray-400">Topic:</span>
+              <span className="text-white font-bold">{gameMetadata.topic}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Questions:</span>
+              <span className="text-white font-bold">{gameMetadata.totalQuestions}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Time per Question:</span>
+              <span className="text-white font-bold">{gameMetadata.timePerQuestion}s</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Points per Question:</span>
+              <span className="text-white font-bold">{gameMetadata.pointsPerQuestion}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">Difficulty:</span>
+              <span className="text-white font-bold capitalize">{gameMetadata.difficulty}</span>
+            </div>
+          </div>
+        </div>
+        <p className="text-gray-400 mt-6 animate-pulse">First question coming soon...</p>
+      </div>
+    );
+  }
+
+  // Active question
+  if (gameState === 'playing' && currentQuestion) {
+    const getTimerColor = () => {
+      if (timeRemaining > 20) return 'text-green-500';
+      if (timeRemaining > 10) return 'text-yellow-500';
+      return 'text-red-500';
+    };
+
+    return (
+      <div className="flex gap-6 max-w-7xl mx-auto p-6">
+        {/* Main Game Area */}
+        <div className="flex-1">
+          {/* Header */}
+          <div className="flex justify-between items-center mb-6">
+            <div className="text-sm text-gray-400">
+              Question <span className="text-yellow-500 font-bold">{currentQuestion.questionNumber}</span> of {currentQuestion.totalQuestions}
+            </div>
+            <div className={`text-3xl font-bold ${getTimerColor()}`}>
+              {timeRemaining}s
+            </div>
+          </div>
+
+          {/* Question Card */}
+          <div className="bg-gray-800 rounded-xl p-8 mb-6">
+            <div className="flex items-start gap-3 mb-6">
+              <div className="bg-yellow-500 text-black px-3 py-1 rounded-lg font-bold text-sm">
+                {currentQuestion.points} pts
+              </div>
+              <div className="bg-gray-700 text-gray-300 px-3 py-1 rounded-lg text-sm">
+                {currentQuestion.topic}
+              </div>
+            </div>
             
-            if (selectedAnswer === null) {
-              buttonClass += 'border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer'
-            } else if (showCorrectAnswer) {
-              if (index === currentQuestion.correctAnswer) {
-                buttonClass += 'border-green-500 bg-green-100 correct-answer'
-              } else if (index === selectedAnswer) {
-                buttonClass += 'border-red-500 bg-red-100 wrong-answer'
-              } else {
-                buttonClass += 'border-gray-200 bg-gray-50'
-              }
-            }
-            
-            return (
+            <h2 className="text-2xl font-bold text-white mb-8 leading-relaxed">
+              {currentQuestion.question}
+            </h2>
+
+            {/* Answer Options */}
+            {currentQuestion.options && currentQuestion.options.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {currentQuestion.options.map((option, index) => {
+                  const isSelected = selectedAnswer === index;
+                  const isDisabled = hasSubmitted || timeRemaining === 0;
+                  
+                  return (
+                    <button
+                      key={index}
+                      onClick={() => handleAnswerSelect(index)}
+                      disabled={isDisabled}
+                      className={`
+                        relative p-6 rounded-xl text-left transition-all duration-200
+                        ${isSelected 
+                          ? 'bg-yellow-500 text-black border-2 border-yellow-400 shadow-lg scale-105' 
+                          : 'bg-gray-700 text-white border-2 border-gray-600 hover:border-yellow-500 hover:bg-gray-600'
+                        }
+                        ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+                      `}
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className={`
+                          w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg
+                          ${isSelected ? 'bg-black text-yellow-500' : 'bg-gray-600 text-white'}
+                        `}>
+                          {String.fromCharCode(65 + index)}
+                        </div>
+                        <div className="flex-1 font-semibold">{option}</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="bg-red-500/20 border-2 border-red-500 rounded-xl p-6 text-center">
+                <p className="text-red-500 font-bold">⚠️ No options available</p>
+                <p className="text-gray-400 text-sm mt-2">Debug: Check browser console for question data</p>
+              </div>
+            )}
+          </div>
+
+          {/* Submit Button */}
+          <div className="text-center">
+            {!hasSubmitted ? (
               <button
-                key={index}
-                onClick={() => handleAnswerSelect(index)}
-                disabled={!isGameActive || selectedAnswer !== null}
-                className={buttonClass}
+                onClick={handleSubmitAnswer}
+                disabled={selectedAnswer === null || timeRemaining === 0}
+                className="bg-yellow-500 hover:bg-yellow-400 disabled:bg-gray-600 disabled:cursor-not-allowed
+                           text-black font-bold py-4 px-12 rounded-xl text-lg transition-all duration-200
+                           disabled:text-gray-400"
               >
-                <div className="flex items-center">
-                  <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center mr-4 font-bold">
-                    {String.fromCharCode(65 + index)}
-                  </div>
-                  <span className="text-lg">{option}</span>
-                </div>
+                {selectedAnswer === null ? 'Select an Answer' : 'Submit Answer'}
               </button>
-            )
-          })}
+            ) : (
+              <div className="text-green-500 font-bold text-lg animate-pulse">
+                ✅ Answer Submitted! Next question coming...
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Leaderboard Sidebar */}
+        <div className="w-80">
+          <div className="bg-gray-800 rounded-xl p-6 sticky top-6">
+            <h3 className="text-xl font-bold text-yellow-500 mb-4 flex items-center gap-2">
+              🏆 Leaderboard
+            </h3>
+            
+            {leaderboard.length > 0 ? (
+              <div className="space-y-3">
+                {leaderboard.map((player, index) => {
+                  const rank = index + 1;
+                  const medalEmoji = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
+                  
+                  return (
+                    <div
+                      key={player.walletAddress}
+                      className={`
+                        p-4 rounded-lg
+                        ${rank === 1 ? 'bg-linear-to-r from-yellow-600 to-yellow-500' : 'bg-gray-700'}
+                      `}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">{medalEmoji}</span>
+                          <span className={`font-bold ${rank === 1 ? 'text-black' : 'text-white'}`}>
+                            {player.username}
+                          </span>
+                        </div>
+                        <div className={`text-xl font-bold ${rank === 1 ? 'text-black' : 'text-yellow-500'}`}>
+                          {player.score}
+                        </div>
+                      </div>
+                      <div className={`text-sm ${rank === 1 ? 'text-black/70' : 'text-gray-400'}`}>
+                        ✅ {player.correctAnswers} correct
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-gray-400 text-center py-8">
+                Leaderboard will appear after first answer
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Answer Feedback Popup */}
+        {showFeedback && showFeedback.show && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+            <div className={`
+              bg-gray-800 rounded-2xl p-8 max-w-md mx-4 text-center
+              transform transition-all duration-300 scale-100
+              ${showFeedback.isCorrect ? 'border-4 border-green-500' : 'border-4 border-red-500'}
+            `}>
+              <div className="text-6xl mb-4">
+                {showFeedback.isCorrect ? '✅' : '❌'}
+              </div>
+              <h3 className={`text-3xl font-bold mb-2 ${showFeedback.isCorrect ? 'text-green-500' : 'text-red-500'}`}>
+                {showFeedback.isCorrect ? 'Correct!' : 'Wrong!'}
+              </h3>
+              {showFeedback.isCorrect && (
+                <div className="text-yellow-500 text-2xl font-bold">
+                  +{showFeedback.score} points
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Game ended - Results
+  if (gameState === 'ended' && gameResults) {
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <div className="text-center mb-8">
+          <h2 className="text-4xl font-bold text-yellow-500 mb-2">Game Over! 🎉</h2>
+          <p className="text-gray-400">
+            Completed {gameResults.totalQuestions} questions in {Math.floor(gameResults.gameTime / 60)}m {gameResults.gameTime % 60}s
+          </p>
+        </div>
+
+        {/* Rankings */}
+        <div className="bg-gray-800 rounded-xl p-8">
+          <h3 className="text-2xl font-bold text-white mb-6 text-center">🏆 Final Rankings</h3>
+          
+          <div className="space-y-4">
+            {gameResults.rankings.map((player, index) => {
+              const medalEmoji = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤';
+              
+              return (
+                <div
+                  key={player.address}
+                  className={`
+                    flex items-center justify-between p-6 rounded-xl
+                    ${index === 0 ? 'bg-linear-to-r from-yellow-600 to-yellow-500' : 'bg-gray-700'}
+                  `}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="text-3xl">{medalEmoji}</div>
+                    <div>
+                      <div className="font-bold text-lg">{player.username}</div>
+                      <div className={index === 0 ? 'text-yellow-200' : 'text-gray-400'}>
+                        {player.address.slice(0, 6)}...{player.address.slice(-4)}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="text-right">
+                    <div className="text-3xl font-bold">{player.score}</div>
+                    <div className={index === 0 ? 'text-yellow-200' : 'text-gray-400'}>
+                      {player.correctAnswers}/{gameResults.totalQuestions} correct
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Leave Button */}
+          <div className="text-center mt-8">
+            <button
+              onClick={handleLeaveGame}
+              className="bg-red-500 hover:bg-red-400 text-white font-bold py-3 px-8 rounded-xl transition-all"
+            >
+              Leave Game
+            </button>
+          </div>
         </div>
       </div>
+    );
+  }
 
-      {/* Back Button */}
-      <div className="text-center">
-        <button
-          onClick={onBackToLobby}
-          className="quiz-button quiz-button-secondary"
-        >
-          Back to Lobby
-        </button>
-      </div>
-    </div>
-  )
+  return null;
 }

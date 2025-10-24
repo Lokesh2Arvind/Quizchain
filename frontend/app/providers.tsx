@@ -2,14 +2,43 @@
 
 import React from 'react'
 import { WagmiConfig, createConfig, configureChains } from 'wagmi'
-import { mainnet, polygon, optimism, arbitrum } from 'wagmi/chains'
+import { 
+  mainnet, 
+  polygon, 
+  polygonMumbai, 
+  optimism, 
+  arbitrum, 
+  sepolia, 
+  goerli, 
+  base, 
+  baseSepolia,
+  bsc,
+  avalanche,
+  fantom,
+  gnosis
+} from 'wagmi/chains'
 import { publicProvider } from 'wagmi/providers/public'
 import { RainbowKitProvider, getDefaultWallets } from '@rainbow-me/rainbowkit'
 import '@rainbow-me/rainbowkit/styles.css'
 import { YellowProvider } from '../src/lib/yellow-context'
+import { BackendProvider } from '../src/lib/backend-context'
 
 const { chains, publicClient } = configureChains(
-  [mainnet, polygon, optimism, arbitrum],
+  [
+    mainnet, 
+    polygon, 
+    polygonMumbai,
+    optimism, 
+    arbitrum, 
+    sepolia,
+    goerli,
+    base,
+    baseSepolia,
+    bsc,
+    avalanche,
+    fantom,
+    gnosis
+  ],
   [publicProvider()]
 )
 
@@ -29,9 +58,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <WagmiConfig config={wagmiConfig}>
       <RainbowKitProvider chains={chains}>
-        <YellowProvider>
-          {children}
-        </YellowProvider>
+        <BackendProvider>
+          <YellowProvider>
+            {children}
+          </YellowProvider>
+        </BackendProvider>
       </RainbowKitProvider>
     </WagmiConfig>
   )
