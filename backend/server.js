@@ -116,18 +116,45 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start server
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`
+// Start server with simple port retry logic to avoid EADDRINUSE crashes during local dev
+const BASE_PORT = parseInt(process.env.PORT || '5000', 10) || 5000;
+const MAX_PORT_SEARCH = 10;
+
+function startServer(port, attemptsRemaining) {
+  const onListening = () => {
+    server.removeListener('error', onError);
+    const address = server.address();
+    const activePort = typeof address === 'object' && address ? address.port : port;
+    // Surface the resolved port for downstream tooling (e.g. frontend env overrides)
+    process.env.PORT = String(activePort);
+    console.log(`
 ╔════════════════════════════════════════╗
 ║   🎮 QuizChain Backend Server          ║
 ║   ⚡ Socket.IO: READY                  ║
 ║   🟡 Yellow Network: Pending           ║
-║   📡 Port: ${PORT}                        ║
+║   📡 Port: ${activePort.toString().padEnd(22)}║
 ╚════════════════════════════════════════╝
-  `);
-});
+    `);
+  };
+
+  const onError = (error) => {
+    server.removeListener('listening', onListening);
+    if (error.code === 'EADDRINUSE' && attemptsRemaining > 0) {
+      const nextPort = port + 1;
+      console.warn(`⚠️  Port ${port} already in use. Retrying on ${nextPort}...`);
+      setTimeout(() => startServer(nextPort, attemptsRemaining - 1), 150);
+    } else {
+      console.error('❌ Failed to start QuizChain backend server:', error);
+      process.exit(1);
+    }
+  };
+
+  server.once('listening', onListening);
+  server.once('error', onError);
+  server.listen(port);
+}
+
+startServer(BASE_PORT, MAX_PORT_SEARCH);
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

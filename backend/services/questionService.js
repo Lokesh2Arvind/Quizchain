@@ -12,10 +12,10 @@ class QuestionService {
   /**
    * Fetch questions based on topic
    * @param {string} topic - 'Age', 'Mixture', 'Random', 'All', etc.
-   * @param {number} count - Number of questions to fetch (default: 10)
+  * @param {number} count - Number of questions to fetch (default: 3)
    * @returns {Promise<Array>} - Array of formatted questions
    */
-  async fetchQuestions(topic, count = 5) {
+  async fetchQuestions(topic, count = 3) {
     try {
       console.log(`📚 Fetching ${count} questions for topic: ${topic}`);
 
@@ -165,7 +165,7 @@ class QuestionService {
       options: options,
       correctAnswer: correctAnswerIndex !== -1 ? correctAnswerIndex : 0,
       topic: rawQuestion.topic || 'Unknown',
-      timeLimit: 30, // 30 seconds per question
+  timeLimit: 10, // 10 seconds per question
       points: 10, // 10 points per correct answer
       // Store explanation for future premium feature (optional)
       explanation: rawQuestion.explanation || null

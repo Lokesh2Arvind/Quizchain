@@ -2,6 +2,7 @@
 
 const roomService = require('../services/roomService');
 const questionService = require('../services/questionService');
+const { processPayout } = require('../services/payoutService');
 
 /**
  * Register all room-related socket handlers
@@ -119,23 +120,33 @@ function registerRoomHandlers(socket, io) {
     // Check if user is host
     const isHost = room.host.walletAddress === user.walletAddress;
 
-    if (isHost && room.status === 'waiting') {
-      // Host leaving before game starts - delete room
+    if (isHost) {
+      if (room.status === 'waiting') {
+        // Host leaving before game starts - delete room
+        socket.leave(roomId);
+        user.currentRoomId = null;
+        
+        // Notify all participants
+        io.to(roomId).emit('room:closed', {
+          reason: 'Host left the room'
+        });
+        
+        // Remove all participants from socket room
+        const sockets = await io.in(roomId).fetchSockets();
+        sockets.forEach(s => s.leave(roomId));
+        
+        console.log(`🗑️ Room ${room.code} closed (host left)`);
+        
+        return callback({ success: true, roomClosed: true });
+      }
+
+      // Host leaving after the game has started/completed.
       socket.leave(roomId);
       user.currentRoomId = null;
-      
-      // Notify all participants
-      io.to(roomId).emit('room:closed', {
-        reason: 'Host left the room'
-      });
-      
-      // Remove all participants from socket room
-      const sockets = await io.in(roomId).fetchSockets();
-      sockets.forEach(s => s.leave(roomId));
-      
-      console.log(`🗑️ Room ${room.code} closed (host left)`);
-      
-      return callback({ success: true, roomClosed: true });
+
+      console.log(`👑 Host ${user.username} left room ${room.code} (status: ${room.status})`);
+
+      return callback({ success: true, roomClosed: room.status !== 'in-progress' });
     }
 
     // Regular participant leaving
@@ -237,7 +248,7 @@ function registerRoomHandlers(socket, io) {
       console.log(`📚 Fetching questions for topic: ${room.config.topic}`);
 
       // Fetch questions from Aptitude API
-      const questionCount = 10; // 10 questions per game
+  const questionCount = 3; // 3 questions per game for concise demos
       const questions = await questionService.fetchQuestions(room.config.topic, questionCount);
 
       console.log('🔍 First question after fetch:', JSON.stringify(questions[0], null, 2));
@@ -280,7 +291,7 @@ function registerRoomHandlers(socket, io) {
       // Send game ready event with game info
       io.to(room.id).emit('game:ready', {
         totalQuestions: questions.length,
-        timePerQuestion: 30,
+  timePerQuestion: 10,
         pointsPerQuestion: 10,
         difficulty: questionService.getDifficulty(room.config.topic),
         topic: room.config.topic
@@ -425,7 +436,9 @@ function sendNextQuestion(roomId, io) {
 
   // Check if game is complete
   if (currentQuestionIndex >= questions.length) {
-    endGame(roomId, io);
+    endGame(roomId, io).catch((error) => {
+      console.error('❌ Failed to finalize game:', error);
+    });
     return;
   }
 
@@ -463,7 +476,7 @@ function sendNextQuestion(roomId, io) {
  * @param {string} roomId 
  * @param {Server} io 
  */
-function endGame(roomId, io) {
+async function endGame(roomId, io) {
   const room = global.rooms.get(roomId);
   if (!room || !room.gameData) {
     return;
@@ -476,15 +489,20 @@ function endGame(roomId, io) {
 
   // Calculate final rankings using the leaderboard function
   const rankings = calculateLeaderboard(room);
+  const payoutReceipt = await processPayout(room, rankings);
 
   // Emit final results
   io.to(roomId).emit('game:ended', {
     rankings,
     totalQuestions: room.gameData.questions.length,
-    gameTime: Math.floor((new Date(room.gameData.endedAt) - new Date(room.gameData.startedAt)) / 1000)
+    gameTime: Math.floor((new Date(room.gameData.endedAt) - new Date(room.gameData.startedAt)) / 1000),
+    payout: payoutReceipt
   });
 
   console.log(`✅ Game ended. Winner: ${rankings[0]?.username || 'None'} with ${rankings[0]?.score || 0} points`);
+  if (payoutReceipt) {
+    console.log(`💸 Payout status: ${payoutReceipt.status} | Amount: ${payoutReceipt.amount} ${payoutReceipt.asset}`);
+  }
 
   // Clean up room after 30 seconds
   setTimeout(() => {

@@ -29,23 +29,88 @@ interface BackendContextType {
 
 const BackendContext = createContext<BackendContextType | undefined>(undefined)
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
+const ENV_BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL
+const FALLBACK_HOST = 'localhost'
+const DEFAULT_PORT = 5000
+const PORT_SCAN_LIMIT = 10
+
+async function probeBackendCandidate(candidate: string, timeoutMs = 1200) {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const healthUrl = `${candidate.replace(/\/$/, '')}/health`
+    const res = await fetch(healthUrl, { method: 'GET', mode: 'cors', credentials: 'include', signal: controller.signal })
+    clearTimeout(timer)
+    if (res.ok) return true
+  } catch {}
+  return false
+}
+
+async function resolveBackendUrl(): Promise<string | null> {
+  const baseCandidates: string[] = []
+  if (ENV_BACKEND_URL) baseCandidates.push(ENV_BACKEND_URL)
+  const host = typeof window !== 'undefined' ? window.location.hostname : FALLBACK_HOST
+  for (let i = 0; i < PORT_SCAN_LIMIT; i += 1) {
+    const port = DEFAULT_PORT + i
+    const candidate = `http://${host}:${port}`
+    if (!baseCandidates.includes(candidate)) baseCandidates.push(candidate)
+  }
+  // As a last resort try same origin (useful when proxied through Next dev server)
+  if (typeof window !== 'undefined') {
+    const sameOrigin = `${window.location.origin}`
+    if (!baseCandidates.includes(sameOrigin)) baseCandidates.push(sameOrigin)
+  }
+
+  for (const candidate of baseCandidates) {
+    const ok = await probeBackendCandidate(candidate)
+    if (ok) return candidate
+  }
+  return null
+}
 
 export function BackendProvider({ children }: { children: ReactNode }) {
   const socketRef = useRef<Socket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [resolvedBackendUrl, setResolvedBackendUrl] = useState<string | null>(null)
   
   const { address, isConnected: walletConnected } = useAccount()
 
   useEffect(() => {
-    // Only connect to backend when wallet is connected
-    if (!walletConnected || !address) return
+    let cancelled = false
+    if (!walletConnected || !address) {
+      setResolvedBackendUrl(null)
+      return
+    }
 
-    console.log('🔌 Connecting to backend:', BACKEND_URL)
+    async function detect() {
+      const backendUrl = await resolveBackendUrl()
+      if (!cancelled) {
+        if (!backendUrl) {
+          setError('Backend server not reachable')
+          setResolvedBackendUrl(null)
+        } else {
+          console.log('🔌 Backend detected:', backendUrl)
+          setResolvedBackendUrl(backendUrl)
+        }
+      }
+    }
+
+    detect()
+
+    return () => {
+      cancelled = true
+    }
+  }, [walletConnected, address])
+
+  useEffect(() => {
+    // Only connect to backend when wallet is connected and backend resolved
+    if (!walletConnected || !address || !resolvedBackendUrl) return
+
+    console.log('🔌 Connecting to backend:', resolvedBackendUrl)
     
-    const socketInstance = io(BACKEND_URL, {
+    const socketInstance = io(resolvedBackendUrl, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,
@@ -70,7 +135,7 @@ export function BackendProvider({ children }: { children: ReactNode }) {
 
     socketInstance.on('connect_error', (err) => {
       console.error('❌ Connection error:', err.message)
-      setError('Failed to connect to backend')
+      setError(`Failed to connect to backend (${err.message})`)
       setIsConnected(false)
     })
 
@@ -134,7 +199,7 @@ export function BackendProvider({ children }: { children: ReactNode }) {
       console.log('🔌 Cleaning up socket connection')
       socketInstance.disconnect()
     }
-  }, [address, walletConnected])
+  }, [address, walletConnected, resolvedBackendUrl])
 
   // Room management methods
   const createRoom = useCallback(async (config: RoomConfig) => {

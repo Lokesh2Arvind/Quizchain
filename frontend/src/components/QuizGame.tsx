@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useAccount } from 'wagmi';
 import { useBackend } from '@/lib/backend-context';
 
 interface Question {
@@ -21,24 +22,43 @@ interface GameMetadata {
   topic: string;
 }
 
+interface PayoutReceipt {
+  status: 'paid' | 'simulated' | 'failed' | 'skipped';
+  asset: string;
+  amount: string;
+  totalPlayers: number;
+  winner: {
+    walletAddress: string;
+    username: string;
+  } | null;
+  transactionHash: string | null;
+  network: string | null;
+  message: string | null;
+  simulated: boolean;
+  timestamp?: string;
+}
+
 interface GameResults {
   rankings: Array<{
-    address: string;
+    walletAddress?: string;
+    address?: string;
     username: string;
     score: number;
     correctAnswers: number;
   }>;
   totalQuestions: number;
   gameTime: number;
+  payout?: PayoutReceipt;
 }
 
 export default function QuizGame() {
   const { socket, currentRoomId, leaveRoom, getCurrentRoom } = useBackend();
+  const { address } = useAccount();
   const [gameState, setGameState] = useState<'waiting' | 'loading' | 'ready' | 'playing' | 'ended'>('waiting');
   const [gameMetadata, setGameMetadata] = useState<GameMetadata | null>(null);
   const [currentQuestion, setCurrentQuestion] = useState<Question | null>(null);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
-  const [timeRemaining, setTimeRemaining] = useState<number>(30);
+  const [timeRemaining, setTimeRemaining] = useState<number>(10);
   const [gameResults, setGameResults] = useState<GameResults | null>(null);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [roomCode, setRoomCode] = useState<string>('');
@@ -108,6 +128,16 @@ export default function QuizGame() {
       setGameResults(data);
       setGameState('ended');
       setCurrentQuestion(null);
+      if (Array.isArray(data.rankings)) {
+        setLeaderboard(
+          data.rankings.map((player) => ({
+            username: player.username,
+            walletAddress: player.walletAddress || player.address || 'unknown',
+            score: player.score,
+            correctAnswers: player.correctAnswers,
+          }))
+        );
+      }
     };
 
     const handleScoreUpdate = (data: any) => {
@@ -366,7 +396,7 @@ export default function QuizGame() {
                   
                   return (
                     <div
-                      key={player.walletAddress}
+                      key={`${player.walletAddress}-${index}`}
                       className={`
                         p-4 rounded-lg
                         ${rank === 1 ? 'bg-linear-to-r from-yellow-600 to-yellow-500' : 'bg-gray-700'}
@@ -426,8 +456,36 @@ export default function QuizGame() {
 
   // Game ended - Results
   if (gameState === 'ended' && gameResults) {
+    const finalRankings = Array.isArray(gameResults.rankings) ? gameResults.rankings : [];
+    const normalizedAddress = address?.toLowerCase() ?? null;
+    const winnerEntry = finalRankings[0];
+    const winnerAddress = winnerEntry ? (winnerEntry.walletAddress || winnerEntry.address || '').toLowerCase() : null;
+    const participantEntry = normalizedAddress
+      ? finalRankings.find((player) => {
+          const playerAddress = (player.walletAddress || player.address || '').toLowerCase();
+          return playerAddress === normalizedAddress;
+        })
+      : undefined;
+    const userIsWinner = Boolean(normalizedAddress && winnerAddress && normalizedAddress === winnerAddress);
+    const outcomeVariant = userIsWinner ? 'winner' : participantEntry ? 'participant' : 'spectator';
+    const bannerTitle = outcomeVariant === 'winner' ? "Congrats, you're the champion! 🎉" : outcomeVariant === 'participant' ? 'Better luck next time! 💪' : 'Match complete';
+    const bannerSubtitle = outcomeVariant === 'winner'
+      ? 'You topped the leaderboard and claimed the pot. Bask in the glory!'
+      : outcomeVariant === 'participant'
+        ? 'Shake it off—the rematch is waiting and the leaderboard is wide open.'
+        : 'Review the final standings below to see how the arena resolved.';
+    const bannerClass = outcomeVariant === 'winner'
+      ? 'border-emerald-400/70 bg-gradient-to-r from-emerald-500/20 via-cyan-500/10 to-emerald-400/15 text-emerald-100'
+      : outcomeVariant === 'participant'
+        ? 'border-amber-400/70 bg-gradient-to-r from-amber-500/20 via-orange-500/10 to-amber-400/15 text-amber-100'
+        : 'border-slate-500/50 bg-slate-900/70 text-slate-200';
+
     return (
       <div className="max-w-4xl mx-auto p-6">
+        <div className={`mb-8 rounded-3xl border px-6 py-5 shadow-[0_30px_90px_-50px_rgba(34,211,238,0.45)] backdrop-blur ${bannerClass}`}>
+          <h3 className="text-2xl font-bold tracking-tight sm:text-3xl">{bannerTitle}</h3>
+          <p className="mt-2 text-sm text-white/80 sm:text-base">{bannerSubtitle}</p>
+        </div>
         <div className="text-center mb-8">
           <h2 className="text-4xl font-bold text-yellow-500 mb-2">Game Over! 🎉</h2>
           <p className="text-gray-400">
@@ -442,10 +500,11 @@ export default function QuizGame() {
           <div className="space-y-4">
             {gameResults.rankings.map((player, index) => {
               const medalEmoji = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤';
+              const resolvedAddress = player.walletAddress || player.address || '';
               
               return (
                 <div
-                  key={player.address}
+                  key={resolvedAddress || `${player.username}-${index}`}
                   className={`
                     flex items-center justify-between p-6 rounded-xl
                     ${index === 0 ? 'bg-linear-to-r from-yellow-600 to-yellow-500' : 'bg-gray-700'}
@@ -456,7 +515,9 @@ export default function QuizGame() {
                     <div>
                       <div className="font-bold text-lg">{player.username}</div>
                       <div className={index === 0 ? 'text-yellow-200' : 'text-gray-400'}>
-                        {player.address.slice(0, 6)}...{player.address.slice(-4)}
+                        {resolvedAddress
+                          ? `${resolvedAddress.slice(0, 6)}...${resolvedAddress.slice(-4)}`
+                          : 'Address unavailable'}
                       </div>
                     </div>
                   </div>
@@ -482,6 +543,65 @@ export default function QuizGame() {
             </button>
           </div>
         </div>
+
+        {gameResults.payout && (
+          <div className="bg-gray-900 rounded-xl p-8 mt-6 border border-yellow-600/30">
+            <h3 className="text-2xl font-bold text-yellow-500 mb-4 text-center">💸 Instant Payout</h3>
+            <div className="space-y-3 text-gray-300">
+              <div className="flex items-center justify-center gap-2 text-lg">
+                <span className="text-3xl">{gameResults.payout.status === 'paid' ? '⚡' : gameResults.payout.status === 'failed' ? '⚠️' : 'ℹ️'}</span>
+                <span>
+                  {gameResults.payout.status === 'paid'
+                    ? 'Prize pool transferred on-chain to the champion!'
+                    : gameResults.payout.status === 'failed'
+                      ? 'Payout encountered an issue. Manual review required.'
+                      : 'Payout simulated for this demo environment.'}
+                </span>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-4 bg-gray-800/60 rounded-xl p-4">
+                <div>
+                  <span className="text-gray-400 block text-sm">Winner</span>
+                  <span className="font-semibold text-white">{gameResults.payout.winner?.username || 'Unknown player'}</span>
+                  <div className="text-xs text-gray-500 break-all">
+                    {gameResults.payout.winner?.walletAddress
+                      ? `${gameResults.payout.winner.walletAddress.slice(0, 6)}...${gameResults.payout.winner.walletAddress.slice(-4)}`
+                      : 'Address unavailable'}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-gray-400 block text-sm">Total Pot</span>
+                  <span className="font-semibold text-white">{gameResults.payout.amount} {gameResults.payout.asset}</span>
+                  <div className="text-xs text-gray-500">{gameResults.payout.totalPlayers} players × entry fee</div>
+                </div>
+                <div>
+                  <span className="text-gray-400 block text-sm">Status</span>
+                  <span className={`font-semibold ${gameResults.payout.status === 'paid' ? 'text-green-400' : gameResults.payout.status === 'failed' ? 'text-red-400' : 'text-yellow-400'}`}>
+                    {gameResults.payout.status.toUpperCase()}
+                  </span>
+                  {gameResults.payout.message && (
+                    <div className="text-xs text-gray-500 mt-1">{gameResults.payout.message}</div>
+                  )}
+                </div>
+                <div>
+                  <span className="text-gray-400 block text-sm">Network</span>
+                  <span className="font-semibold text-white">{gameResults.payout.network || 'Not configured'}</span>
+                  {gameResults.payout.transactionHash && (
+                    <div className="text-xs text-gray-500 break-all mt-1">
+                      Tx: {gameResults.payout.transactionHash.slice(0, 10)}...{gameResults.payout.transactionHash.slice(-6)}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {gameResults.payout.simulated && (
+                <div className="text-sm text-yellow-400 text-center">
+                  Configure payout credentials on the backend to enable live on-chain settlements.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
