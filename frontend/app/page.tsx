@@ -11,7 +11,7 @@ import type { Quiz, GameState } from '@/types'
 
 export default function Home() {
   const { address, isConnected } = useAccount()
-  const { isConnected: yellowConnected, connect: connectYellow, error: yellowError } = useYellow()
+  const { isConnected: yellowConnected, connect: connectYellow, error: yellowError, requestTestTokens } = useYellow()
   const { 
     socket, 
     isConnected: backendConnected, 
@@ -346,10 +346,27 @@ export default function Home() {
           
           <div className="flex items-center gap-4">
             {yellowConnected && (
-              <div className="flex items-center gap-2 bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                Yellow Connected
-              </div>
+              <>
+                <div className="flex items-center gap-2 bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  Yellow Connected
+                </div>
+                <button
+                  onClick={requestTestTokens}
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-semibold transition-colors"
+                >
+                  💰 Get Test Tokens
+                </button>
+              </>
+            )}
+            
+            {!yellowConnected && isConnected && (
+              <button
+                onClick={connectYellow}
+                className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-semibold transition-colors"
+              >
+                Connect to Yellow Network
+              </button>
             )}
             
             {yellowError && (
