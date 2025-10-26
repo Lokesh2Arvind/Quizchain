@@ -73,10 +73,12 @@ If payout variables are omitted, the backend emits **simulated** receipts so the
 ## 3. Run the Stack
 In separate terminals:
 ```bash
-# Backend (from Quizchain/backend)
+# Backend (from Quizchain/)
+cd backend
 npm run dev
 
-# Frontend (from Quizchain/frontend)
+# Frontend (from Quizchain/ in another terminal)
+cd frontend
 npm run dev
 ```
 - The backend listens on the first free port between `5000-5009` and prints the active port.
