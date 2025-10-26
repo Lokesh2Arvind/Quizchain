@@ -54,7 +54,7 @@ function registerRoomHandlers(socket, io) {
   });
 
   // Join an existing room
-  socket.on('room:join', (data, callback) => {
+  socket.on('room:join', async (data, callback) => {
     console.log('🚪 Room join request:', data);
 
     const { roomCode, password } = data;
@@ -63,6 +63,19 @@ function registerRoomHandlers(socket, io) {
     const user = global.users.get(socket.id);
     if (!user) {
       return callback({ success: false, error: 'User not connected' });
+    }
+
+    // Get room to check if it exists
+    const room = roomService.findRoomByCode(roomCode);
+    if (!room) {
+      return callback({ success: false, error: 'Room not found' });
+    }
+
+    // For testnet: Skip balance check (Yellow ledger balance is off-chain and complex to verify)
+    // In production, you'd query Yellow Network's ledger via RPC
+    const entryFee = room.config.entryFee || 0;
+    if (entryFee > 0) {
+      console.log(`💰 Entry fee: ${entryFee} USD (balance check skipped for testnet)`);
     }
 
     // Join room
@@ -237,7 +250,7 @@ function registerRoomHandlers(socket, io) {
       console.log(`📚 Fetching questions for topic: ${room.config.topic}`);
 
       // Fetch questions from Aptitude API
-      const questionCount = 10; // 10 questions per game
+      const questionCount = 3; // 3 questions per game (quick testing)
       const questions = await questionService.fetchQuestions(room.config.topic, questionCount);
 
       console.log('🔍 First question after fetch:', JSON.stringify(questions[0], null, 2));
@@ -263,6 +276,46 @@ function registerRoomHandlers(socket, io) {
         room.gameData.playerAnswers[address] = [];
         room.gameData.playerScores[address] = 0;
       });
+
+      // Create Yellow Network app session for prize pool & collect entry fees
+      try {
+        if (global.yellowService && global.yellowService.isConnected) {
+          console.log('🟡 Creating Yellow app session...');
+          const yellowSession = await global.yellowService.createAppSession(
+            room.id,
+            allPlayers,
+            room.config.entryFee,
+            room.config.asset
+          );
+          room.yellowSession = yellowSession;
+          console.log('✅ Yellow session created:', yellowSession.sessionId);
+
+          // Collect entry fees from all players
+          if (room.config.entryFee > 0) {
+            console.log(`💰 Collecting entry fees (${room.config.entryFee} USD each from ${allPlayers.length} players)...`);
+            
+            const feeCollections = await Promise.allSettled(
+              allPlayers.map(playerAddress => 
+                global.yellowService.collectEntryFee(playerAddress, room.config.entryFee)
+              )
+            );
+
+            const successfulCollections = feeCollections.filter(r => r.status === 'fulfilled' && r.value === true);
+            console.log(`✅ Collected entry fees from ${successfulCollections.length}/${allPlayers.length} players`);
+
+            if (successfulCollections.length < allPlayers.length) {
+              console.warn(`⚠️ Some entry fees could not be collected`);
+            }
+          }
+        } else {
+          console.warn('⚠️ Yellow Network not available, continuing without prize pool');
+          room.yellowSession = null;
+        }
+      } catch (yellowError) {
+        console.error('❌ Yellow session creation failed:', yellowError.message);
+        console.warn('⚠️ Game will continue without prize pool');
+        room.yellowSession = null;
+      }
 
       // Update room status to in-progress
       room.status = 'in-progress';
@@ -477,11 +530,77 @@ function endGame(roomId, io) {
   // Calculate final rankings using the leaderboard function
   const rankings = calculateLeaderboard(room);
 
+  // Distribute prize via Yellow Network if session exists
+  if (room.yellowSession && rankings.length > 0) {
+    const winner = rankings[0];
+    const prizeAmount = room.config.entryFee * (1 + room.participants.length);
+    
+    console.log('🟡 Distributing prize via Yellow Network...');
+    console.log(`🏆 Winner: ${winner.username} (${winner.walletAddress})`);
+    console.log(`💰 Prize Amount: ${prizeAmount} ${room.config.asset}`);
+    
+    // Close app session and distribute prize via Yellow ledger
+    global.yellowService.closeAppSession(
+      room.yellowSession.sessionId,
+      winner.walletAddress,
+      prizeAmount
+    ).then(async (result) => {
+      if (result.success) {
+        console.log('✅ App session closed');
+        
+        // Distribute prize via Yellow Network ledger system
+        try {
+          console.log('💸 Distributing prize via Yellow ledger...');
+          const prizeResult = await global.yellowService.distributePrizeLedger(
+            winner.walletAddress,
+            prizeAmount
+          );
+
+          if (prizeResult && prizeResult.success) {
+            console.log('✅ Prize distributed successfully via Yellow ledger!');
+            
+            // Notify everyone about successful prize distribution
+            io.to(roomId).emit('game:prizeDistributed', {
+              winner: winner.walletAddress,
+              winnerUsername: winner.username,
+              amount: prizeAmount,
+              asset: room.config.asset,
+              method: 'yellow-ledger',
+              success: true
+            });
+          } else {
+            console.error('❌ Prize distribution failed');
+            io.to(roomId).emit('game:prizeDistributed', {
+              winner: winner.walletAddress,
+              amount: prizeAmount,
+              asset: room.config.asset,
+              success: false,
+              error: 'Prize distribution failed'
+            });
+          }
+        } catch (prizeError) {
+          console.error('❌ Prize distribution error:', prizeError);
+          io.to(roomId).emit('game:prizeDistributed', {
+            winner: winner.walletAddress,
+            amount: prizeAmount,
+            asset: room.config.asset,
+            success: false,
+            error: prizeError.message
+          });
+        }
+      }
+    }).catch(error => {
+      console.error('❌ Session close failed:', error.message);
+    });
+  }
+
   // Emit final results
   io.to(roomId).emit('game:ended', {
     rankings,
     totalQuestions: room.gameData.questions.length,
-    gameTime: Math.floor((new Date(room.gameData.endedAt) - new Date(room.gameData.startedAt)) / 1000)
+    gameTime: Math.floor((new Date(room.gameData.endedAt) - new Date(room.gameData.startedAt)) / 1000),
+    prizePool: room.yellowSession ? room.config.entryFee * (1 + room.participants.length) : 0,
+    asset: room.config.asset
   });
 
   console.log(`✅ Game ended. Winner: ${rankings[0]?.username || 'None'} with ${rankings[0]?.score || 0} points`);

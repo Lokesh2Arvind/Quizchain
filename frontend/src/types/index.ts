@@ -53,6 +53,19 @@ export interface QuizResult {
   prizeWon: number
 }
 
+export interface GameResults {
+  rankings: Array<{
+    username: string
+    walletAddress: string
+    score: number
+    correctAnswers: number
+  }>
+  totalQuestions: number
+  gameTime: number
+  prizePool?: number
+  asset?: string
+}
+
 // Yellow SDK Types
 export interface YellowConfig {
   clearNodeUrl: string

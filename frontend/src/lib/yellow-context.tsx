@@ -11,7 +11,7 @@ import {
 } from '@erc7824/nitrolite'
 import type { AppSession, StateUpdate, YellowState, YellowConfig } from '../types'
 import { useAccount, useWalletClient } from 'wagmi'
-import { Wallet } from 'ethers'
+import { Wallet, HDNodeWallet } from 'ethers'
 import { Hex } from 'viem'
 
 interface YellowContextType extends YellowState {
@@ -47,7 +47,7 @@ export function YellowProvider({ children }: { children: ReactNode }) {
   })
 
   const [ws, setWs] = useState<WebSocket | null>(null)
-  const [stateWallet, setStateWallet] = useState<Wallet | null>(null)
+  const [stateWallet, setStateWallet] = useState<HDNodeWallet | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [pendingChallenge, setPendingChallenge] = useState<any>(null)
   const [authRequestParams, setAuthRequestParams] = useState<any>(null)
@@ -340,6 +340,8 @@ export function YellowProvider({ children }: { children: ReactNode }) {
 
       websocket.onclose = (event) => {
         console.log(`🔌 WebSocket connection closed: ${event.code} ${event.reason}`)
+        console.log('ℹ️ This is normal - game sessions are tracked on the backend')
+        console.log('💡 Prize distribution continues even if Yellow disconnects during gameplay')
         setState(prev => ({ ...prev, isConnected: false }))
         setWs(null)
         setIsAuthenticated(false)

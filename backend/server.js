@@ -4,8 +4,9 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// Import handlers
+// Import handlers and services
 const { registerRoomHandlers } = require('./handlers/roomHandlers');
+const yellowService = require('./services/yellowService');
 
 // Initialize Express app
 const app = express();
@@ -38,6 +39,7 @@ global.rooms = rooms;
 global.users = users;
 global.answerSubmissions = answerSubmissions;
 global.io = io;
+global.yellowService = yellowService; // Make Yellow service globally accessible
 
 // Basic health check endpoint
 app.get('/health', (req, res) => {
@@ -116,22 +118,85 @@ io.on('connection', (socket) => {
   });
 });
 
+// Initialize Yellow Network connection
+async function initializeYellowNetwork() {
+  try {
+    console.log('🟡 Initializing Yellow Network...');
+    
+    const privateKey = process.env.BACKEND_WALLET_PRIVATE_KEY;
+    if (!privateKey) {
+      console.warn('⚠️ BACKEND_WALLET_PRIVATE_KEY not set - Yellow Network features disabled');
+      return false;
+    }
+
+    // Initialize backend wallet
+    const walletAddress = yellowService.initializeBackendWallet(privateKey);
+    console.log('✅ Backend wallet initialized:', walletAddress);
+
+    // Connect to Yellow Network
+    await yellowService.connect();
+    console.log('✅ Yellow Network connected and authenticated');
+    
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to initialize Yellow Network:', error.message);
+    console.warn('⚠️ Server will continue without Yellow Network features');
+    return false;
+  }
+}
+
 // Start server
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`
 ╔════════════════════════════════════════╗
 ║   🎮 QuizChain Backend Server          ║
 ║   ⚡ Socket.IO: READY                  ║
-║   🟡 Yellow Network: Pending           ║
+║   🟡 Yellow Network: Connecting...     ║
 ║   📡 Port: ${PORT}                        ║
 ╚════════════════════════════════════════╝
   `);
+
+  // Initialize Yellow Network asynchronously
+  const yellowConnected = await initializeYellowNetwork();
+  
+  if (yellowConnected) {
+    const status = yellowService.getStatus();
+    console.log(`
+╔════════════════════════════════════════╗
+║   ✅ Yellow Network: CONNECTED         ║
+║   🔑 Wallet: ${status.backendWallet?.substring(0, 10)}...  ║
+║   ⛓️  Chain: Sepolia Testnet           ║
+╚════════════════════════════════════════╝
+    `);
+  }
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, closing server...');
+  
+  // Disconnect Yellow Network
+  if (yellowService.isConnected) {
+    console.log('🟡 Disconnecting Yellow Network...');
+    yellowService.disconnect();
+  }
+  
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('\nSIGINT received, closing server...');
+  
+  // Disconnect Yellow Network
+  if (yellowService.isConnected) {
+    console.log('🟡 Disconnecting Yellow Network...');
+    yellowService.disconnect();
+  }
+  
   server.close(() => {
     console.log('Server closed');
     process.exit(0);

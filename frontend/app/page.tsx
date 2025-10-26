@@ -181,7 +181,20 @@ export default function Home() {
         setCurrentRoom(result.room)
         alert('✅ Joined room successfully!')
       } else {
-        alert(`❌ Error: ${result.error}`)
+        // Check if error is due to insufficient balance
+        if (result.error && result.error.includes('Insufficient Yellow Test USD')) {
+          const entryFee = (result as any).entryFee || 'unknown'
+          alert(`❌ Insufficient Balance!\n\n` +
+                `Entry fee: ${entryFee} USD\n\n` +
+                `You need Yellow Test USD in your custody balance.\n\n` +
+                `Steps:\n` +
+                `1. Get Test USD from faucet: https://clearnet-sandbox.yellow.com/faucet/requestTokens\n` +
+                `2. Approve custody contract to spend your tokens\n` +
+                `3. Deposit tokens into Yellow custody\n` +
+                `4. Try joining again`)
+        } else {
+          alert(`❌ Error: ${result.error}`)
+        }
       }
     } catch (error) {
       console.error('Error joining room:', error)
@@ -321,6 +334,12 @@ export default function Home() {
     setCurrentView('lobby')
   }
 
+  const handleLeaveGameRoom = () => {
+    // Clear the current room state to return to lobby
+    setCurrentRoom(null)
+    setCurrentView('lobby')
+  }
+
   return (
     <div className="min-h-screen p-4">
       <header className="max-w-6xl mx-auto mb-8">
@@ -402,7 +421,20 @@ export default function Home() {
               <>
                 {/* Show game if room status is active, playing, or in-progress */}
                 {currentRoom && (currentRoom.status === 'active' || currentRoom.status === 'playing' || currentRoom.status === 'in-progress' || currentRoom.status === 'starting') ? (
-                  <QuizGame />
+                  <QuizGame onLeaveGame={handleLeaveGameRoom} />
+                ) : currentRoom && currentRoom.status === 'completed' ? (
+                  /* Game Completed - Show message */
+                  <div className="bg-white/80 backdrop-blur-sm rounded-xl p-8 shadow-lg mb-6 text-center">
+                    <div className="text-6xl mb-4">🎉</div>
+                    <h3 className="text-3xl font-bold mb-2">Game Completed!</h3>
+                    <p className="text-gray-600 mb-6">The game has ended. You can return to the lobby to join or create a new game.</p>
+                    <button
+                      onClick={handleLeaveGameRoom}
+                      className="bg-blue-500 hover:bg-blue-400 text-white font-bold py-3 px-8 rounded-xl transition-all"
+                    >
+                      Return to Lobby
+                    </button>
+                  </div>
                 ) : currentRoom ? (
                   /* Room Lobby View */
                   <div className="bg-white/80 backdrop-blur-sm rounded-xl p-6 shadow-lg mb-6">

@@ -3,6 +3,10 @@
 import { useEffect, useState } from 'react';
 import { useBackend } from '@/lib/backend-context';
 
+interface QuizGameProps {
+  onLeaveGame?: () => void;
+}
+
 interface Question {
   questionNumber: number;
   totalQuestions: number;
@@ -30,9 +34,11 @@ interface GameResults {
   }>;
   totalQuestions: number;
   gameTime: number;
+  prizePool?: number;
+  asset?: string;
 }
 
-export default function QuizGame() {
+export default function QuizGame({ onLeaveGame }: QuizGameProps = {}) {
   const { socket, currentRoomId, leaveRoom, getCurrentRoom } = useBackend();
   const [gameState, setGameState] = useState<'waiting' | 'loading' | 'ready' | 'playing' | 'ended'>('waiting');
   const [gameMetadata, setGameMetadata] = useState<GameMetadata | null>(null);
@@ -115,11 +121,20 @@ export default function QuizGame() {
       setLeaderboard(data.leaderboard || []);
     };
 
+    const handlePrizeDistributed = (data: any) => {
+      console.log('💰 Prize distributed:', data);
+      // Could show a toast notification here
+      if (data.winner && data.amount) {
+        console.log(`🏆 ${data.winner} won ${data.amount} ${data.asset}!`);
+      }
+    };
+
     socket.on('room:gameStarting', handleGameStarting);
     socket.on('game:ready', handleGameReady);
     socket.on('game:question', handleGameQuestion);
     socket.on('game:ended', handleGameEnded);
     socket.on('game:scoreUpdate', handleScoreUpdate);
+    socket.on('game:prizeDistributed', handlePrizeDistributed);
 
     return () => {
       socket.off('room:gameStarting', handleGameStarting);
@@ -127,6 +142,7 @@ export default function QuizGame() {
       socket.off('game:question', handleGameQuestion);
       socket.off('game:ended', handleGameEnded);
       socket.off('game:scoreUpdate', handleScoreUpdate);
+      socket.off('game:prizeDistributed', handlePrizeDistributed);
     };
   }, [socket]);
 
@@ -167,11 +183,19 @@ export default function QuizGame() {
   };
 
   const handleLeaveGame = () => {
+    // Reset all game state
     setGameState('waiting');
     setGameMetadata(null);
     setCurrentQuestion(null);
     setGameResults(null);
+    
+    // Leave the room in backend
     leaveRoom();
+    
+    // Call parent callback to clear room state and return to lobby
+    if (onLeaveGame) {
+      onLeaveGame();
+    }
   };
 
   // Waiting for game to start
@@ -262,6 +286,20 @@ export default function QuizGame() {
 
     return (
       <div className="flex gap-6 max-w-7xl mx-auto p-6">
+        {/* Yellow Network Info Banner */}
+        <div className="fixed top-4 right-4 bg-blue-900 border border-blue-500 rounded-lg p-3 max-w-md z-50">
+          <div className="flex items-start gap-2">
+            <span className="text-blue-400 text-xl">ℹ️</span>
+            <div className="text-sm">
+              <p className="text-blue-200 font-semibold mb-1">Yellow Network Info</p>
+              <p className="text-gray-300 text-xs">
+                If Yellow disconnects during gameplay, don't worry! Your game session and prize tracking continue on the backend. 
+                Prizes are distributed automatically when the game ends.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Main Game Area */}
         <div className="flex-1">
           {/* Header */}
@@ -426,6 +464,10 @@ export default function QuizGame() {
 
   // Game ended - Results
   if (gameState === 'ended' && gameResults) {
+    const winner = gameResults.rankings[0];
+    const currentUserAddress = ''; // Get from wallet context if needed
+    const isWinner = winner?.address === currentUserAddress;
+
     return (
       <div className="max-w-4xl mx-auto p-6">
         <div className="text-center mb-8">
@@ -435,6 +477,21 @@ export default function QuizGame() {
           </p>
         </div>
 
+        {/* Prize Pool Banner */}
+        {gameResults.prizePool && gameResults.prizePool > 0 && (
+          <div className="bg-linear-to-r from-yellow-600 to-yellow-500 rounded-xl p-6 mb-6 text-center">
+            <div className="text-white">
+              <div className="text-sm font-semibold mb-2">💰 PRIZE POOL</div>
+              <div className="text-4xl font-bold mb-2">
+                {gameResults.prizePool} {gameResults.asset || 'USDC'}
+              </div>
+              <div className="text-yellow-100">
+                Winner takes all! 🏆
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Rankings */}
         <div className="bg-gray-800 rounded-xl p-8">
           <h3 className="text-2xl font-bold text-white mb-6 text-center">🏆 Final Rankings</h3>
@@ -442,35 +499,62 @@ export default function QuizGame() {
           <div className="space-y-4">
             {gameResults.rankings.map((player, index) => {
               const medalEmoji = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤';
+              const isFirstPlace = index === 0;
               
               return (
                 <div
                   key={player.address}
                   className={`
                     flex items-center justify-between p-6 rounded-xl
-                    ${index === 0 ? 'bg-linear-to-r from-yellow-600 to-yellow-500' : 'bg-gray-700'}
+                    ${isFirstPlace ? 'bg-linear-to-r from-yellow-600 to-yellow-500 shadow-lg' : 'bg-gray-700'}
                   `}
                 >
                   <div className="flex items-center gap-4">
                     <div className="text-3xl">{medalEmoji}</div>
                     <div>
-                      <div className="font-bold text-lg">{player.username}</div>
-                      <div className={index === 0 ? 'text-yellow-200' : 'text-gray-400'}>
-                        {player.address.slice(0, 6)}...{player.address.slice(-4)}
+                      <div className="font-bold text-lg flex items-center gap-2">
+                        {player.username}
+                        {isFirstPlace && gameResults.prizePool && (
+                          <span className="bg-yellow-400 text-yellow-900 px-2 py-1 rounded text-xs font-bold">
+                            WINNER
+                          </span>
+                        )}
+                      </div>
+                      <div className={isFirstPlace ? 'text-yellow-200' : 'text-gray-400'}>
+                        {player.address ? `${player.address.slice(0, 6)}...${player.address.slice(-4)}` : 'N/A'}
                       </div>
                     </div>
                   </div>
                   
                   <div className="text-right">
                     <div className="text-3xl font-bold">{player.score}</div>
-                    <div className={index === 0 ? 'text-yellow-200' : 'text-gray-400'}>
+                    <div className={isFirstPlace ? 'text-yellow-200' : 'text-gray-400'}>
                       {player.correctAnswers}/{gameResults.totalQuestions} correct
                     </div>
+                    {isFirstPlace && gameResults.prizePool && (
+                      <div className="mt-2 text-yellow-200 font-bold">
+                        +{gameResults.prizePool} {gameResults.asset || 'USDC'}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
             })}
           </div>
+
+          {/* Yellow Network Badge */}
+          {gameResults.prizePool && gameResults.prizePool > 0 && (
+            <div className="mt-6 p-4 bg-gray-700 rounded-lg text-center">
+              <div className="text-sm text-gray-400 mb-2">
+                Prizes distributed instantly via
+              </div>
+              <div className="flex items-center justify-center gap-2">
+                <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                <span className="text-yellow-500 font-bold">Yellow Network</span>
+                <span className="text-gray-400 text-xs">(Sepolia Testnet)</span>
+              </div>
+            </div>
+          )}
 
           {/* Leave Button */}
           <div className="text-center mt-8">
